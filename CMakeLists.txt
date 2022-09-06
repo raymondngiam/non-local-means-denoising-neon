@@ -11,9 +11,6 @@ set(CMAKE_CXX_FLAGS "-O0 -fopenmp -march=armv8-a")
 
 find_package(OpenMP REQUIRED)
 
-include_directories(${PROJECT_SOURCE_DIR}
-        /home/ray/Android/Sdk/ndk/25.1.8937393/toolchains/llvm/prebuilt/linux-x86_64/lib64/clang/14.0.6/)
-
 add_executable(nlm_denoise main.cpp)
 target_link_libraries(nlm_denoise
         OpenMP::OpenMP_CXX)
