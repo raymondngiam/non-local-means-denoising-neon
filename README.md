@@ -1,7 +1,7 @@
-### Non Local Means Denoising using Arm Neon Intrinsics
+## Non Local Means Denoising using Arm Neon Intrinsics
 ---
 
-#### Background
+### Background
 
 - Algorithm
 
@@ -41,7 +41,9 @@
 
     <div style='text-align:center'><img width=33% src='img/denoised.png'></div>
 
-#### Dependencies
+---
+
+### Dependencies
 
 - CMake $\geq$ 3.22
 - clang++ $\geq$ 14.0.6
@@ -49,8 +51,9 @@
 - ANDROID_VERSION $\geq$ 19.0
 - ANDROID_ARCH_ABI == arm64-v8a
 
+---
 
-#### How to build
+### How to build
 
 Replace the `<android-ndk-clang++>` placeholder below with the path to your Android NDK `clang++` executable.
 
@@ -62,7 +65,9 @@ $ cmake .. -DCMAKE_CXX_COMPILER=<android-ndk-clang++> -DCMAKE_BUILD_TYPE=Debug
 $ make
 ```
 
-#### How to run
+---
+
+### How to run
 
 
 - SIMD vectorization
@@ -77,7 +82,7 @@ $ make
         Image loaded
         Running nlm_unoptimized:
         Thread count [1]
-        Execution time =5981.24 milliseconds
+        Execution time =5987.01 milliseconds
         ```
 
     - To run the implementation **with Neon intrinsic optimization v1, with a single thread**, run the executable `nlm_denoise` with a single argument, `1`.
@@ -90,7 +95,7 @@ $ make
         Image loaded
         Running nlm_neon:
         Thread count [1]
-        Execution time =8907.29 milliseconds
+        Execution time =8885.16 milliseconds
         ```
 
     - To run the implementation **with Neon intrinsic optimization v2, with a single thread**, run the executable `nlm_denoise` with a single argument, `2`.
@@ -103,12 +108,12 @@ $ make
         Image loaded
         Running nlm_neon_fixed_k:
         Thread count [1]
-        Execution time =7130.1 milliseconds
+        Execution time =7053.51 milliseconds
         ```
 
 - OpenMP parallel for loop
 
-    - To run the baseline implementation **without SIMD intrinsic optimization, with OpenMP parallel for loop**, run the executable `nlm_denoise` as before with first argument = `0`, plus an arbitrary second argument.
+    - To run the baseline implementation **without SIMD intrinsic optimization, with OpenMP parallel for loop**, run the executable `nlm_denoise` with first argument = `0`, plus an arbitrary second argument.
 
         ```shell
         $ ./nlm_denoise 0 1                                      
@@ -118,7 +123,7 @@ $ make
         Image loaded
         Running nlm_unoptimized:
         Thread count [8]
-        Execution time =2513.93 milliseconds
+        Execution time =2520.85 milliseconds
         ```
 
     - To run the implementation **with Neon intrinsic optimization v1, with OpenMP parallel for loop**, run the executable `nlm_denoise` with first argument = `1`, plus an arbitrary second argument.
@@ -131,7 +136,7 @@ $ make
         Image loaded
         Running nlm_neon:
         Thread count [8]
-        Execution time =1687.9 milliseconds
+        Execution time =1680.05 milliseconds
         ```
 
     - To run the implementation **with Neon intrinsic optimization v2, with OpenMP parallel for loop**, run the executable `nlm_denoise` with first argument = `2`, plus an arbitrary second argument.
@@ -144,28 +149,34 @@ $ make
         Image loaded
         Running nlm_neon_fixed_k:
         Thread count [8]
-        Execution time =1412 milliseconds
+        Execution time =1448.88 milliseconds
         ```
 
-#### Result
+---
+
+### Result
 
 <b>Single threaded:</b>
 
 |Configuration|Time (milliseconds)|
 |:-:|:-:|
-|Baseline|5981.24|
-|Neon intrinsic optimization v1|8907.29|
-|Neon intrinsic optimization v2|7130.10|
+|Baseline|5987.01|
+|Neon intrinsic optimization v1|8885.16|
+|Neon intrinsic optimization v2|7053.51|
 
 <b>Multithreaded threaded (OpenMP parallel for):</b>
 
 |Configuration|Time (milliseconds)|
 |:-:|:-:|
-|Baseline|2513.93|
-|Neon intrinsic optimization v1|1687.90|
-|Neon intrinsic optimization v2|1412.00|
+|Baseline|2520.85|
+|Neon intrinsic optimization v1|1680.05|
+|Neon intrinsic optimization v2|1448.88|
 
-#### Implementation details
+<img src='img/runtime-profile.png'>
+
+---
+
+### Implementation details
 
 - Inner block implementation
 
@@ -224,7 +235,7 @@ $ make
 
         <br>
         
-        Line 233-273 in <a href=./main.cpp>main.cpp</a>:
+        Line 233-274 in <a href=./main.cpp>main.cpp</a>:
 
         ```c++
         template <bool fixedK>
@@ -246,16 +257,17 @@ $ make
                     for (int ny = -N; ny < N+1; ny++) {
                         for (int nx = -N; nx < N+1; nx++) {
                             float ssd = 0.f;
+                            float32x4_t vec128 = vdupq_n_f32(0.0); // clear accumulators
                             // for kernel convolution, we iterate along the x-axis only,
                             // at each iteration, process (2*K)+1 contiguous elements along y-axis
                             for (int kx = -K; kx < K + 1; kx++) {
                                 int refIndex = (padLen + y + ny) + (padLen + x + nx + kx) * padded.height;
                                 int kernelIndex = (padLen + y) + (padLen + x + kx) * padded.height;
                                 if (fixedK){
-                                    ssd += ssd_reduce_K3(padded.data.data()+kernelIndex, padded.data.data()+refIndex);
+                                    ssd += ssd_reduce_K3(vec128, padded.data.data()+kernelIndex, padded.data.data()+refIndex);
                                 }
                                 else{
-                                    ssd += ssd_reduce(padded.data.data()+kernelIndex, padded.data.data()+refIndex, kernelWidth);
+                                    ssd += ssd_reduce(vec128, padded.data.data()+kernelIndex, padded.data.data()+refIndex, kernelWidth);
                                 }
 
                             }
@@ -290,7 +302,7 @@ $ make
 
     <br>
         
-    Line 222-230 in <a href=./main.cpp>main.cpp</a>:
+    Line 178-186 in <a href=./main.cpp>main.cpp</a>:
 
     ```c++
     Image<uint8_t> result(im.height,im.width);
@@ -315,19 +327,18 @@ $ make
         
         <br>
             
-        Line 275-332 in <a href=./main.cpp>main.cpp</a>:
+        Line 276-332 in <a href=./main.cpp>main.cpp</a>:
         
         ```cpp
         const int SIMD_MULTPLE = 4;
 
         // neon simd utility function
-        float ssd_reduce(const float* ptrA, const float* ptrB, uint32_t count) {
+        float ssd_reduce(float32x4_t vec128, const float* ptrA, const float* ptrB, uint32_t count) {
             int remainder = count % SIMD_MULTPLE;
             int fullLoopCount = count/SIMD_MULTPLE; //floor
             int fullLoopEnd = (fullLoopCount-1)*SIMD_MULTPLE ;
 
             float32x2_t vec64a, vec64b;
-            float32x4_t vec128 = vdupq_n_f32(0.0); // clear accumulators
             float32x4_t vecA, vecB;
 
             // full stride, contiguous memory access loop
@@ -380,30 +391,33 @@ $ make
 
     - `Neon intrinsic optimization v2`
 
-        Building on the foundation of `Neon intrinsic optimization v1`, we replace the two instructions, namely `vmulq_f32`(multiplication) and `vaddq_f32`(addition) with a single instruction, `vmlaq_f32`(multiply-accumulate).
+        Building on the foundation of `Neon intrinsic optimization v1`:
+        
+        1. we replace the two instructions, namely `vmulq_f32`(multiplication) and `vaddq_f32`(addition) with a single instruction, `vmlaq_f32`(multiply-accumulate).
 
-        <b>Before:</b>
+            <b>Before:</b>
 
-        ```c++
-        float32x4_t diff = vsubq_f32(vecA,vecB);
-        float32x4_t squared = vmulq_f32(diff,diff);
-        vec128=vaddq_f32(vec128, squared); // accumulate the squared_diff
-        ```
+            ```c++
+            float32x4_t diff = vsubq_f32(vecA,vecB);
+            float32x4_t squared = vmulq_f32(diff,diff);
+            vec128=vaddq_f32(vec128, squared); // accumulate the squared_diff
+            ```
 
-        <b>After:</b>
+            <b>After:</b>
 
-        ```c++
-        float32x4_t diff = vsubq_f32(vecA,vecB);        
-        vec128 = vmlaq_f32(vec128, diff, diff); // multiply-accumulate the diff
-        ```
+            ```c++
+            float32x4_t diff = vsubq_f32(vecA,vecB);        
+            vec128 = vmlaq_f32(vec128, diff, diff); // multiply-accumulate the diff
+            ```
+        2. by fixing `K` to be constant, we remove the condition checking for remainder loop.
 
-        In addition, by fixing `K` to be constant, we remove the condition checking for remainder loop.
+        <br>
 
         The implementation of the utility function, `ssd_reduce_K3` is as shown below:
 
         <br>
             
-        Line 334-376 in <a href=./main.cpp>main.cpp</a>:
+        Line 334-375 in <a href=./main.cpp>main.cpp</a>:
 
         ```c++
         const int K3_COUNT = 7; // K=3; count=2*K+1
@@ -411,9 +425,8 @@ $ make
         const int K3_FULL_LOOP_END = (K3_FULL_LOOP_COUNT-1)*SIMD_MULTPLE;
         const int K3_REMAINDER_LOOP_START = (K3_FULL_LOOP_COUNT)*SIMD_MULTPLE;
 
-        float ssd_reduce_K3(const float* ptrA, const float* ptrB) {
+        float ssd_reduce_K3(float32x4_t vec128, const float* ptrA, const float* ptrB) {
             float32x2_t vec64a, vec64b;
-            float32x4_t vec128 = vdupq_n_f32(0.0); // clear accumulators
             float32x4_t vecA, vecB;
 
             // full stride, contiguous memory access loop
