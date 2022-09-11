@@ -79,9 +79,9 @@ struct Image{
     }
 };
 
-float ssd_reduce(float32x4_t vec128, const float* ptrA, const float* ptrB, uint32_t count);
+float ssd_reduce(const float* ptrA, const float* ptrB, uint32_t count);
 
-float ssd_reduce_K3(float32x4_t vec128, const float* ptrA, const float* ptrB);
+void ssd_reduce_K3(float32x4_t& vec128, const float* ptrA, const float* ptrB);
 
 void nlm_unoptimized(int N,
                      int K,
@@ -256,12 +256,23 @@ void nlm_neon(int N,
                         int refIndex = (padLen + y + ny) + (padLen + x + nx + kx) * padded.height;
                         int kernelIndex = (padLen + y) + (padLen + x + kx) * padded.height;
                         if (fixedK){
-                            ssd += ssd_reduce_K3(vec128, padded.data.data()+kernelIndex, padded.data.data()+refIndex);
+                            ssd_reduce_K3(vec128, padded.data.data()+kernelIndex, padded.data.data()+refIndex);
                         }
                         else{
-                            ssd += ssd_reduce(vec128, padded.data.data()+kernelIndex, padded.data.data()+refIndex, kernelWidth);
+                            ssd += ssd_reduce(padded.data.data()+kernelIndex, padded.data.data()+refIndex, kernelWidth);
                         }
 
+                    }
+                    // perform the summation of the accumulator only once
+                    if (fixedK){
+                        float32x2_t vec64a, vec64b;
+                        vec64a = vget_low_f32(vec128); // split 128-bit vector
+
+                        vec64b = vget_high_f32(vec128); // into two 64-bit vectors
+
+                        vec64a = vadd_f32 (vec64a, vec64b); // add 64-bit vectors together
+
+                        ssd = vget_lane_f32(vec64a, 0) + vget_lane_f32(vec64a, 1);
                     }
                     float dSquared = ssd/kernelArea;
                     float ex = std::exp(-dSquared/hSquared);
@@ -276,12 +287,13 @@ void nlm_neon(int N,
 const int SIMD_MULTPLE = 4;
 
 // neon simd utility function
-float ssd_reduce(float32x4_t vec128, const float* ptrA, const float* ptrB, uint32_t count) {
+float ssd_reduce(const float* ptrA, const float* ptrB, uint32_t count) {
     int remainder = count % SIMD_MULTPLE;
     int fullLoopCount = count/SIMD_MULTPLE; //floor
     int fullLoopEnd = (fullLoopCount-1)*SIMD_MULTPLE ;
 
     float32x2_t vec64a, vec64b;
+    float32x4_t vec128 = vdupq_n_f32(0.0); // clear accumulators
     float32x4_t vecA, vecB;
 
     // full stride, contiguous memory access loop
@@ -336,8 +348,7 @@ const int K3_FULL_LOOP_COUNT = K3_COUNT/SIMD_MULTPLE; //floor
 const int K3_FULL_LOOP_END = (K3_FULL_LOOP_COUNT-1)*SIMD_MULTPLE;
 const int K3_REMAINDER_LOOP_START = (K3_FULL_LOOP_COUNT)*SIMD_MULTPLE;
 
-float ssd_reduce_K3(float32x4_t vec128, const float* ptrA, const float* ptrB) {
-    float32x2_t vec64a, vec64b;
+void ssd_reduce_K3(float32x4_t& vec128, const float* ptrA, const float* ptrB) {
     float32x4_t vecA, vecB;
 
     // full stride, contiguous memory access loop
@@ -360,18 +371,6 @@ float ssd_reduce_K3(float32x4_t vec128, const float* ptrA, const float* ptrB) {
 
     float32x4_t diff = vsubq_f32(vecA,vecB);
     vec128 = vmlaq_f32(vec128, diff, diff); // multiply-accumulate the diff
-
-    vec64a = vget_low_f32(vec128); // split 128-bit vector
-
-    vec64b = vget_high_f32(vec128); // into two 64-bit vectors
-
-    vec64a = vadd_f32 (vec64a, vec64b); // add 64-bit vectors together
-
-    float result = vget_lane_f32(vec64a, 0); // extract lanes and
-
-    result += vget_lane_f32(vec64a, 1); // add together scalars
-
-    return result;
 }
 
 template void nlm_neon<true>(
