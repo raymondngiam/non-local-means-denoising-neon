@@ -82,7 +82,7 @@ $ make
         Image loaded
         Running nlm_unoptimized:
         Thread count [1]
-        Execution time =5987.01 milliseconds
+        Execution time =6009.92 milliseconds
         ```
 
     - To run the implementation **with Neon intrinsic optimization v1, with a single thread**, run the executable `nlm_denoise` with a single argument, `1`.
@@ -95,7 +95,7 @@ $ make
         Image loaded
         Running nlm_neon:
         Thread count [1]
-        Execution time =8885.16 milliseconds
+        Execution time =8919.9 milliseconds
         ```
 
     - To run the implementation **with Neon intrinsic optimization v2, with a single thread**, run the executable `nlm_denoise` with a single argument, `2`.
@@ -108,7 +108,7 @@ $ make
         Image loaded
         Running nlm_neon_fixed_k:
         Thread count [1]
-        Execution time =7053.51 milliseconds
+        Execution time =4743.76 milliseconds
         ```
 
 - OpenMP parallel for loop
@@ -123,7 +123,7 @@ $ make
         Image loaded
         Running nlm_unoptimized:
         Thread count [8]
-        Execution time =2520.85 milliseconds
+        Execution time =2539.15 milliseconds
         ```
 
     - To run the implementation **with Neon intrinsic optimization v1, with OpenMP parallel for loop**, run the executable `nlm_denoise` with first argument = `1`, plus an arbitrary second argument.
@@ -136,7 +136,7 @@ $ make
         Image loaded
         Running nlm_neon:
         Thread count [8]
-        Execution time =1680.05 milliseconds
+        Execution time =1663.07 milliseconds
         ```
 
     - To run the implementation **with Neon intrinsic optimization v2, with OpenMP parallel for loop**, run the executable `nlm_denoise` with first argument = `2`, plus an arbitrary second argument.
@@ -149,7 +149,7 @@ $ make
         Image loaded
         Running nlm_neon_fixed_k:
         Thread count [8]
-        Execution time =1448.88 milliseconds
+        Execution time =1177.97 milliseconds
         ```
 
 ---
@@ -160,17 +160,17 @@ $ make
 
 |Configuration|Time (milliseconds)|
 |:-:|:-:|
-|Baseline|5987.01|
-|Neon intrinsic optimization v1|8885.16|
-|Neon intrinsic optimization v2|7053.51|
+|Baseline|6009.92|
+|Neon intrinsic optimization v1|8919.90|
+|Neon intrinsic optimization v2|4743.76|
 
 <b>Multithreaded threaded (OpenMP parallel for):</b>
 
 |Configuration|Time (milliseconds)|
 |:-:|:-:|
-|Baseline|2520.85|
-|Neon intrinsic optimization v1|1680.05|
-|Neon intrinsic optimization v2|1448.88|
+|Baseline|2539.15|
+|Neon intrinsic optimization v1|1663.07|
+|Neon intrinsic optimization v2|1177.97|
 
 <img src='img/runtime-profile.png'>
 
@@ -235,7 +235,7 @@ $ make
 
         <br>
         
-        Line 233-274 in <a href=./main.cpp>main.cpp</a>:
+        Line 233-285 in <a href=./main.cpp>main.cpp</a>:
 
         ```c++
         template <bool fixedK>
@@ -264,12 +264,23 @@ $ make
                                 int refIndex = (padLen + y + ny) + (padLen + x + nx + kx) * padded.height;
                                 int kernelIndex = (padLen + y) + (padLen + x + kx) * padded.height;
                                 if (fixedK){
-                                    ssd += ssd_reduce_K3(vec128, padded.data.data()+kernelIndex, padded.data.data()+refIndex);
+                                    ssd_reduce_K3(vec128, padded.data.data()+kernelIndex, padded.data.data()+refIndex);
                                 }
                                 else{
-                                    ssd += ssd_reduce(vec128, padded.data.data()+kernelIndex, padded.data.data()+refIndex, kernelWidth);
+                                    ssd += ssd_reduce(padded.data.data()+kernelIndex, padded.data.data()+refIndex, kernelWidth);
                                 }
 
+                            }
+                            // perform the summation of the accumulator only once
+                            if (fixedK){
+                                float32x2_t vec64a, vec64b;
+                                vec64a = vget_low_f32(vec128); // split 128-bit vector
+
+                                vec64b = vget_high_f32(vec128); // into two 64-bit vectors
+
+                                vec64a = vadd_f32 (vec64a, vec64b); // add 64-bit vectors together
+
+                                ssd = vget_lane_f32(vec64a, 0) + vget_lane_f32(vec64a, 1);
                             }
                             float dSquared = ssd/kernelArea;
                             float ex = std::exp(-dSquared/hSquared);
@@ -327,18 +338,19 @@ $ make
         
         <br>
             
-        Line 276-332 in <a href=./main.cpp>main.cpp</a>:
+        Line 287-344 in <a href=./main.cpp>main.cpp</a>:
         
         ```cpp
         const int SIMD_MULTPLE = 4;
 
         // neon simd utility function
-        float ssd_reduce(float32x4_t vec128, const float* ptrA, const float* ptrB, uint32_t count) {
+        float ssd_reduce(const float* ptrA, const float* ptrB, uint32_t count) {
             int remainder = count % SIMD_MULTPLE;
             int fullLoopCount = count/SIMD_MULTPLE; //floor
             int fullLoopEnd = (fullLoopCount-1)*SIMD_MULTPLE ;
 
             float32x2_t vec64a, vec64b;
+            float32x4_t vec128 = vdupq_n_f32(0.0); // clear accumulators
             float32x4_t vecA, vecB;
 
             // full stride, contiguous memory access loop
@@ -409,7 +421,9 @@ $ make
             float32x4_t diff = vsubq_f32(vecA,vecB);        
             vec128 = vmlaq_f32(vec128, diff, diff); // multiply-accumulate the diff
             ```
-        2. by fixing `K` to be constant, we remove the condition checking for remainder loop.
+        1. by fixing `K` to be constant, we remove the condition checking for remainder loop.
+
+        1. by making the `vec128` accumulator a common global variable shared among all the column-wise 1-d convolutions, and perform the summation of the accumulator only once (for every instance of 2d kernel convolution).
 
         <br>
 
@@ -417,7 +431,7 @@ $ make
 
         <br>
             
-        Line 334-375 in <a href=./main.cpp>main.cpp</a>:
+        Line 346-374 in <a href=./main.cpp>main.cpp</a>:
 
         ```c++
         const int K3_COUNT = 7; // K=3; count=2*K+1
@@ -425,8 +439,7 @@ $ make
         const int K3_FULL_LOOP_END = (K3_FULL_LOOP_COUNT-1)*SIMD_MULTPLE;
         const int K3_REMAINDER_LOOP_START = (K3_FULL_LOOP_COUNT)*SIMD_MULTPLE;
 
-        float ssd_reduce_K3(float32x4_t vec128, const float* ptrA, const float* ptrB) {
-            float32x2_t vec64a, vec64b;
+        void ssd_reduce_K3(float32x4_t& vec128, const float* ptrA, const float* ptrB) {
             float32x4_t vecA, vecB;
 
             // full stride, contiguous memory access loop
@@ -449,18 +462,6 @@ $ make
 
             float32x4_t diff = vsubq_f32(vecA,vecB);
             vec128 = vmlaq_f32(vec128, diff, diff); // multiply-accumulate the diff
-
-            vec64a = vget_low_f32(vec128); // split 128-bit vector
-
-            vec64b = vget_high_f32(vec128); // into two 64-bit vectors
-
-            vec64a = vadd_f32 (vec64a, vec64b); // add 64-bit vectors together
-
-            float result = vget_lane_f32(vec64a, 0); // extract lanes and
-
-            result += vget_lane_f32(vec64a, 1); // add together scalars
-
-            return result;
         }
         ```
 
